@@ -8,6 +8,7 @@
 #include <SPI.h>
 #include <Ethernet.h>
 #include <EthernetUdp.h>
+#include <avr/wdt.h>
 
 // ============================
 // СЕТЕВЫЕ НАСТРОЙКИ
@@ -28,6 +29,9 @@ bool udpStarted = false;
 unsigned long lastEthernetCheck = 0;
 const unsigned long ETHERNET_CHECK_INTERVAL = 2000;
 
+bool ethernetLinkWasOff = false;
+bool allRelaysAreOff = false;
+
 // ============================
 // РЕЛЕ
 // ============================
@@ -45,7 +49,7 @@ const unsigned long ETHERNET_CHECK_INTERVAL = 2000;
 
 const byte RELAY_POSTBOX     = 2;
 const byte RELAY_ENERGYMETER = A0;
-const byte RELAY_LIFT_PANEL  = 1;
+const byte RELAY_LIFT_PANEL  = A1;
 const byte RELAY_BALL        = A2;
 const byte RELAY_BREAKER     = 7;
 
@@ -63,6 +67,9 @@ const byte RELAY_OFF = HIGH;
 char packetBuffer[80];
 
 void setup() {
+  wdt_disable();
+  delay(100);
+
   Serial.begin(9600);
 
   pinMode(RELAY_POSTBOX, OUTPUT);
@@ -92,10 +99,13 @@ void setup() {
 
   Serial.print("UDP port: ");
   Serial.println(localPort);
+
+  wdt_enable(WDTO_4S);
 }
 
 
 void loop() {
+  wdt_reset();
 
   checkEthernet();
 
@@ -155,21 +165,25 @@ void checkEthernet() {
       udpStarted = false;
     }
 
+    ethernetLinkWasOff = true;
+
+    return;
+  }
+
+  if (link == LinkON && ethernetLinkWasOff) {
+    Serial.println("Link restored");
+
+    ethernetLinkWasOff = false;
+    restartEthernet();
+
     return;
   }
 
   if (link == LinkON && !udpStarted) {
-    Serial.println("Link restored");
+    Serial.println("UDP not started, restart Ethernet");
+    restartEthernet();
 
-    allRelaysOff();
-
-    if (Udp.begin(localPort)) {
-      udpStarted = true;
-      Serial.println("UDP started");
-    }
-    else {
-      Serial.println("ERROR: UDP start failed");
-    }
+    return;
   }
 }
 
@@ -281,6 +295,7 @@ void processCommand(char* command) {
 
 void relayOn(byte pin) {
   digitalWrite(pin, RELAY_ON);
+  allRelaysAreOff = false;
 
   Serial.print("Relay ");
   Serial.print(pin);
@@ -304,5 +319,9 @@ void allRelaysOff() {
   digitalWrite(RELAY_BALL, RELAY_OFF);
   digitalWrite(RELAY_BREAKER, RELAY_OFF);
 
-  Serial.println("ALL RELAYS OFF");
+  if (!allRelaysAreOff) {
+    Serial.println("ALL RELAYS OFF");
+  }
+
+  allRelaysAreOff = true;
 }
