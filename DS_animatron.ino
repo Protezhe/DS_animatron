@@ -51,7 +51,6 @@ const byte RELAY_POSTBOX     = 2;
 const byte RELAY_ENERGYMETER = A0;
 const byte RELAY_LIFT_PANEL  = A1;
 const byte RELAY_BALL        = A2;
-const byte RELAY_BREAKER     = 7;
 
 
 // Большинство китайских релейных модулей включаются LOW.
@@ -60,6 +59,29 @@ const byte RELAY_BREAKER     = 7;
 
 const byte RELAY_ON  = LOW;
 const byte RELAY_OFF = HIGH;
+const unsigned long RELAY_AUTO_OFF_INTERVAL = 120000;
+
+unsigned long relayPostboxStarted = 0;
+unsigned long relayEnergymeterStarted = 0;
+unsigned long relayLiftPanelStarted = 0;
+unsigned long relayBallStarted = 0;
+
+bool relayPostboxOn = false;
+bool relayEnergymeterOn = false;
+bool relayLiftPanelOn = false;
+bool relayBallOn = false;
+
+
+// ============================
+// DF PLAYER 1
+// ============================
+//
+// MP3-TF-16P / DFPlayer Mini:
+// IO1 обычно срабатывает коротким замыканием на GND.
+
+const byte PLAYER1_IO1 = 5;
+const byte PLAYER1_BUSY = 7;
+const unsigned int PLAYER_TRIGGER_PULSE = 200;
 
 
 // ============================
@@ -76,7 +98,10 @@ void setup() {
   pinMode(RELAY_ENERGYMETER, OUTPUT);
   pinMode(RELAY_LIFT_PANEL, OUTPUT);
   pinMode(RELAY_BALL, OUTPUT);
-  pinMode(RELAY_BREAKER, OUTPUT);
+
+  pinMode(PLAYER1_IO1, OUTPUT);
+  digitalWrite(PLAYER1_IO1, HIGH);
+  pinMode(PLAYER1_BUSY, INPUT_PULLUP);
 
   // При включении Arduino всё выключаем
   allRelaysOff();
@@ -107,6 +132,7 @@ void setup() {
 void loop() {
   wdt_reset();
 
+  checkRelayAutoOff();
   checkEthernet();
 
   if (!udpStarted) {
@@ -266,22 +292,22 @@ void processCommand(char* command) {
 
   // -------- BREAKER --------
 
-  else if (strcmp(command, "/breaker,1") == 0) {
-    relayOn(RELAY_BREAKER);
-  }
-
-  else if (strcmp(command, "/breaker,0") == 0) {
-    relayOff(RELAY_BREAKER);
-  }
-
-
-  // Телефон пока ничего не делает
-
   else if (
-    strcmp(command, "/phone,1") == 0 ||
-    strcmp(command, "/phone,0") == 0
+    strcmp(command, "/breaker,1") == 0 ||
+    strcmp(command, "/breaker,0") == 0
   ) {
-    Serial.println("Phone command ignored");
+    Serial.println("Breaker command ignored");
+  }
+
+
+  // -------- PHONE / DF PLAYER 1 --------
+
+  else if (strcmp(command, "/phone,1") == 0) {
+    playPhoneAudio();
+  }
+
+  else if (strcmp(command, "/phone,0") == 0) {
+    Serial.println("Phone audio command OFF ignored");
   }
 
 
@@ -296,6 +322,7 @@ void processCommand(char* command) {
 void relayOn(byte pin) {
   digitalWrite(pin, RELAY_ON);
   allRelaysAreOff = false;
+  rememberRelayOn(pin);
 
   Serial.print("Relay ");
   Serial.print(pin);
@@ -305,6 +332,7 @@ void relayOn(byte pin) {
 
 void relayOff(byte pin) {
   digitalWrite(pin, RELAY_OFF);
+  rememberRelayOff(pin);
 
   Serial.print("Relay ");
   Serial.print(pin);
@@ -317,11 +345,94 @@ void allRelaysOff() {
   digitalWrite(RELAY_ENERGYMETER, RELAY_OFF);
   digitalWrite(RELAY_LIFT_PANEL, RELAY_OFF);
   digitalWrite(RELAY_BALL, RELAY_OFF);
-  digitalWrite(RELAY_BREAKER, RELAY_OFF);
 
   if (!allRelaysAreOff) {
     Serial.println("ALL RELAYS OFF");
   }
 
+  relayPostboxOn = false;
+  relayEnergymeterOn = false;
+  relayLiftPanelOn = false;
+  relayBallOn = false;
+
   allRelaysAreOff = true;
+}
+
+
+void rememberRelayOn(byte pin) {
+  unsigned long now = millis();
+
+  if (pin == RELAY_POSTBOX) {
+    relayPostboxStarted = now;
+    relayPostboxOn = true;
+  }
+  else if (pin == RELAY_ENERGYMETER) {
+    relayEnergymeterStarted = now;
+    relayEnergymeterOn = true;
+  }
+  else if (pin == RELAY_LIFT_PANEL) {
+    relayLiftPanelStarted = now;
+    relayLiftPanelOn = true;
+  }
+  else if (pin == RELAY_BALL) {
+    relayBallStarted = now;
+    relayBallOn = true;
+  }
+}
+
+
+void rememberRelayOff(byte pin) {
+  if (pin == RELAY_POSTBOX) {
+    relayPostboxOn = false;
+  }
+  else if (pin == RELAY_ENERGYMETER) {
+    relayEnergymeterOn = false;
+  }
+  else if (pin == RELAY_LIFT_PANEL) {
+    relayLiftPanelOn = false;
+  }
+  else if (pin == RELAY_BALL) {
+    relayBallOn = false;
+  }
+}
+
+
+void checkRelayAutoOff() {
+  unsigned long now = millis();
+
+  if (relayPostboxOn && now - relayPostboxStarted >= RELAY_AUTO_OFF_INTERVAL) {
+    Serial.println("Auto OFF: postbox");
+    relayOff(RELAY_POSTBOX);
+  }
+
+  if (relayEnergymeterOn && now - relayEnergymeterStarted >= RELAY_AUTO_OFF_INTERVAL) {
+    Serial.println("Auto OFF: energymeter");
+    relayOff(RELAY_ENERGYMETER);
+  }
+
+  if (relayLiftPanelOn && now - relayLiftPanelStarted >= RELAY_AUTO_OFF_INTERVAL) {
+    Serial.println("Auto OFF: lift_panel");
+    relayOff(RELAY_LIFT_PANEL);
+  }
+
+  if (relayBallOn && now - relayBallStarted >= RELAY_AUTO_OFF_INTERVAL) {
+    Serial.println("Auto OFF: ball");
+    relayOff(RELAY_BALL);
+  }
+}
+
+
+void playPhoneAudio() {
+  if (digitalRead(PLAYER1_BUSY) == LOW) {
+    Serial.println("Phone audio BUSY LOW");
+  }
+  else {
+    Serial.println("Phone audio BUSY HIGH");
+  }
+
+  Serial.println("Phone audio play");
+
+  digitalWrite(PLAYER1_IO1, LOW);
+  delay(PLAYER_TRIGGER_PULSE);
+  digitalWrite(PLAYER1_IO1, HIGH);
 }
