@@ -8,6 +8,7 @@
 #include <SPI.h>
 #include <Ethernet.h>
 #include <EthernetUdp.h>
+#include <Servo.h>
 #include <avr/wdt.h>
 
 // ============================
@@ -85,6 +86,47 @@ const unsigned int PLAYER_TRIGGER_PULSE = 200;
 
 
 // ============================
+// СЕРВА ТЕЛЕФОНА
+// ============================
+
+const byte PHONE_SERVO_PIN = 9;
+const byte PHONE_SERVO_START = 0;
+const byte PHONE_SERVO_FORWARD = 180;
+const unsigned long PHONE_SERVO_AUTO_RESET_INTERVAL = 120000;
+const byte PHONE_SERVO_NOTE_COUNT = 8;
+
+const unsigned long PHONE_SERVO_NOTE_STARTS[PHONE_SERVO_NOTE_COUNT] = {
+  5000, 6455, 7559, 8718, 9938, 11125, 12330, 13458
+};
+
+const byte PHONE_SERVO_NOTE_TARGETS[PHONE_SERVO_NOTE_COUNT] = {
+  180, 0,
+  51, 0,
+  132, 0,
+  109, 0
+};
+
+const unsigned int PHONE_SERVO_MOVE_DURATIONS[PHONE_SERVO_NOTE_COUNT] = {
+  900, 635,
+  255, 179,
+  660, 465,
+  545, 384
+};
+
+const unsigned int PHONE_SERVO_HOLD_DURATIONS[PHONE_SERVO_NOTE_COUNT] = {
+  0, 0,
+  4, 80,
+  2, 207,
+  0, 292
+};
+
+Servo phoneServo;
+byte phoneServoCurrentAngle = PHONE_SERVO_START;
+unsigned long phoneServoResetStarted = 0;
+bool phoneServoResetPending = false;
+
+
+// ============================
 
 char packetBuffer[80];
 
@@ -102,6 +144,10 @@ void setup() {
   pinMode(PLAYER1_IO1, OUTPUT);
   digitalWrite(PLAYER1_IO1, HIGH);
   pinMode(PLAYER1_BUSY, INPUT_PULLUP);
+
+  phoneServo.attach(PHONE_SERVO_PIN);
+  phoneServo.write(PHONE_SERVO_START);
+  phoneServoCurrentAngle = PHONE_SERVO_START;
 
   // При включении Arduino всё выключаем
   allRelaysOff();
@@ -133,6 +179,7 @@ void loop() {
   wdt_reset();
 
   checkRelayAutoOff();
+  checkPhoneServoAutoReset();
   checkEthernet();
 
   if (!udpStarted) {
@@ -303,7 +350,9 @@ void processCommand(char* command) {
   // -------- PHONE / DF PLAYER 1 --------
 
   else if (strcmp(command, "/phone,1") == 0) {
+    unsigned long phoneAudioStarted = millis();
     playPhoneAudio();
+    playPhoneServoMidiMotion(phoneAudioStarted);
   }
 
   else if (strcmp(command, "/phone,0") == 0) {
@@ -435,4 +484,71 @@ void playPhoneAudio() {
   digitalWrite(PLAYER1_IO1, LOW);
   delay(PLAYER_TRIGGER_PULSE);
   digitalWrite(PLAYER1_IO1, HIGH);
+}
+
+
+void playPhoneServoMidiMotion(unsigned long startedAt) {
+  Serial.println("Phone servo MIDI motion");
+
+  for (byte i = 0; i < PHONE_SERVO_NOTE_COUNT; i += 1) {
+    waitUntilFrom(startedAt, PHONE_SERVO_NOTE_STARTS[i]);
+    movePhoneServoTimed(PHONE_SERVO_NOTE_TARGETS[i], PHONE_SERVO_MOVE_DURATIONS[i]);
+    delayWithWatchdog(PHONE_SERVO_HOLD_DURATIONS[i]);
+  }
+
+  phoneServoResetStarted = millis();
+  phoneServoResetPending = true;
+}
+
+
+void waitUntilFrom(unsigned long startedAt, unsigned long targetOffset) {
+  while (millis() - startedAt < targetOffset) {
+    wdt_reset();
+    delay(1);
+  }
+}
+
+
+void delayWithWatchdog(unsigned int durationMs) {
+  unsigned long startedAt = millis();
+
+  while (millis() - startedAt < durationMs) {
+    wdt_reset();
+    delay(1);
+  }
+}
+
+
+void movePhoneServoTimed(byte targetAngle, unsigned int durationMs) {
+  int fromAngle = phoneServoCurrentAngle;
+  unsigned long startedAt = millis();
+
+  while (millis() - startedAt < durationMs) {
+    unsigned long elapsed = millis() - startedAt;
+    int nextAngle = fromAngle + (long)(targetAngle - fromAngle) * elapsed / durationMs;
+
+    phoneServo.write(nextAngle);
+    phoneServoCurrentAngle = nextAngle;
+    wdt_reset();
+    delay(5);
+  }
+
+  phoneServo.write(targetAngle);
+  phoneServoCurrentAngle = targetAngle;
+}
+
+
+void checkPhoneServoAutoReset() {
+  if (!phoneServoResetPending) {
+    return;
+  }
+
+  if (millis() - phoneServoResetStarted < PHONE_SERVO_AUTO_RESET_INTERVAL) {
+    return;
+  }
+
+  Serial.println("Phone servo auto reset");
+
+  movePhoneServoTimed(PHONE_SERVO_START, 1000);
+  phoneServoResetPending = false;
 }
