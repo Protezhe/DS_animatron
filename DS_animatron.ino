@@ -1,6 +1,6 @@
 // D9 Серва в телефоне
-// DF Player (1) D7 - bysy и D6 IO 1
-// DF Player (2) D5 - bysy и D4 IO 1
+// DF Player (1) D5 IO 1
+// DF Player (2) D6 IO 1
 // D8 неизвестно в стену
 // RELAY_POSTBOX     = D2 D3;
 
@@ -48,7 +48,7 @@ bool allRelaysAreOff = false;
 // D4 также часто занят SD-картой Ethernet Shield.
 //
 
-const byte RELAY_POSTBOX     = 2;
+const byte RELAY_POSTBOX     = 3;
 const byte RELAY_ENERGYMETER = A0;
 const byte RELAY_LIFT_PANEL  = A1;
 const byte RELAY_BALL        = A2;
@@ -74,14 +74,14 @@ bool relayBallOn = false;
 
 
 // ============================
-// DF PLAYER 1
+// DF PLAYERS
 // ============================
 //
 // MP3-TF-16P / DFPlayer Mini:
 // IO1 обычно срабатывает коротким замыканием на GND.
 
-const byte PLAYER1_IO1 = 5;
-const byte PLAYER1_BUSY = 7;
+const byte PLAYER1_IO1 = 2;
+const byte PLAYER2_IO1 = 5;
 const unsigned int PLAYER_TRIGGER_PULSE = 200;
 
 
@@ -90,34 +90,39 @@ const unsigned int PLAYER_TRIGGER_PULSE = 200;
 // ============================
 
 const byte PHONE_SERVO_PIN = 9;
-const byte PHONE_SERVO_START = 0;
-const byte PHONE_SERVO_FORWARD = 180;
+const byte PHONE_SERVO_START = 180;
+const byte PHONE_SERVO_FORWARD = 0;
 const unsigned long PHONE_SERVO_AUTO_RESET_INTERVAL = 120000;
-const byte PHONE_SERVO_NOTE_COUNT = 8;
+const byte PHONE_SERVO_MOVE_COUNT = 4;
+const byte PHONE_SERVO_FORWARD_STEP_DELAY_MS = 4;
+const unsigned int PHONE_SERVO_START_DELAY_MS = 5300;
 
-const unsigned long PHONE_SERVO_NOTE_STARTS[PHONE_SERVO_NOTE_COUNT] = {
-  5000, 6455, 7559, 8718, 9938, 11125, 12330, 13458
+const unsigned int PHONE_SERVO_FORWARD_DURATIONS[PHONE_SERVO_MOVE_COUNT] = {
+  900,
+  259,
+  661,
+  545
 };
 
-const byte PHONE_SERVO_NOTE_TARGETS[PHONE_SERVO_NOTE_COUNT] = {
-  180, 0,
-  51, 0,
-  132, 0,
-  109, 0
+const unsigned int PHONE_SERVO_RETURN_DURATIONS[PHONE_SERVO_MOVE_COUNT] = {
+  635,
+  259,
+  672,
+  676
 };
 
-const unsigned int PHONE_SERVO_MOVE_DURATIONS[PHONE_SERVO_NOTE_COUNT] = {
-  900, 635,
-  255, 179,
-  660, 465,
-  545, 384
+const unsigned int PHONE_SERVO_FORWARD_HOLD_DURATIONS[PHONE_SERVO_MOVE_COUNT] = {
+  555,
+  899,
+  526,
+  583
 };
 
-const unsigned int PHONE_SERVO_HOLD_DURATIONS[PHONE_SERVO_NOTE_COUNT] = {
-  0, 0,
-  4, 80,
-  2, 207,
-  0, 292
+const unsigned int PHONE_SERVO_RETURN_HOLD_DURATIONS[PHONE_SERVO_MOVE_COUNT] = {
+  469,
+  960,
+  533,
+  5866
 };
 
 Servo phoneServo;
@@ -129,6 +134,8 @@ bool phoneServoResetPending = false;
 // ============================
 
 char packetBuffer[80];
+char serialBuffer[80];
+byte serialBufferLength = 0;
 
 void setup() {
   wdt_disable();
@@ -142,8 +149,9 @@ void setup() {
   pinMode(RELAY_BALL, OUTPUT);
 
   pinMode(PLAYER1_IO1, OUTPUT);
-  digitalWrite(PLAYER1_IO1, HIGH);
-  pinMode(PLAYER1_BUSY, INPUT_PULLUP);
+  releasePlayerTrigger(PLAYER1_IO1);
+  pinMode(PLAYER2_IO1, OUTPUT);
+  releasePlayerTrigger(PLAYER2_IO1);
 
   phoneServo.attach(PHONE_SERVO_PIN);
   phoneServo.write(PHONE_SERVO_START);
@@ -180,6 +188,7 @@ void loop() {
 
   checkRelayAutoOff();
   checkPhoneServoAutoReset();
+  readSerialCommands();
   checkEthernet();
 
   if (!udpStarted) {
@@ -200,6 +209,85 @@ void loop() {
     Serial.println(packetBuffer);
 
     processCommand(packetBuffer);
+  }
+}
+
+
+// ============================
+// ОТЛАДОЧНЫЕ КОМАНДЫ ЧЕРЕЗ SERIAL
+// ============================
+
+void readSerialCommands() {
+  while (Serial.available() > 0) {
+    char c = Serial.read();
+
+    if (c == '\n' || c == '\r') {
+      if (serialBufferLength > 0) {
+        serialBuffer[serialBufferLength] = '\0';
+        processSerialCommand(serialBuffer);
+        serialBufferLength = 0;
+      }
+
+      continue;
+    }
+
+    if (serialBufferLength < sizeof(serialBuffer) - 1) {
+      serialBuffer[serialBufferLength] = c;
+      serialBufferLength += 1;
+    }
+  }
+}
+
+
+void processSerialCommand(char* command) {
+  trimCommand(command);
+
+  if (command[0] == '\0') {
+    return;
+  }
+
+  Serial.print("Serial command: ");
+  Serial.println(command);
+
+  if (command[0] == '/') {
+    processCommand(command);
+    return;
+  }
+
+  char normalizedCommand[80];
+
+  if (strchr(command, ',') == NULL) {
+    snprintf(normalizedCommand, sizeof(normalizedCommand), "/%s,1", command);
+  }
+  else {
+    snprintf(normalizedCommand, sizeof(normalizedCommand), "/%s", command);
+  }
+
+  processCommand(normalizedCommand);
+}
+
+
+void trimCommand(char* command) {
+  byte start = 0;
+
+  while (command[start] == ' ' || command[start] == '\t') {
+    start += 1;
+  }
+
+  if (start > 0) {
+    byte i = 0;
+
+    do {
+      command[i] = command[start + i];
+      i += 1;
+    } while (command[i - 1] != '\0');
+  }
+
+  int end = strlen(command) - 1;
+
+  while (end >= 0 && (command[end] == ' ' || command[end] == '\t')) {
+    command[end] = '\0';
+    end -= 1;
   }
 }
 
@@ -347,12 +435,10 @@ void processCommand(char* command) {
   }
 
 
-  // -------- PHONE / DF PLAYER 1 --------
+  // -------- PHONE / DF PLAYERS --------
 
   else if (strcmp(command, "/phone,1") == 0) {
-    unsigned long phoneAudioStarted = millis();
-    playPhoneAudio();
-    playPhoneServoMidiMotion(phoneAudioStarted);
+    playPhoneSequence();
   }
 
   else if (strcmp(command, "/phone,0") == 0) {
@@ -471,30 +557,50 @@ void checkRelayAutoOff() {
 }
 
 
-void playPhoneAudio() {
-  if (digitalRead(PLAYER1_BUSY) == LOW) {
-    Serial.println("Phone audio BUSY LOW");
-  }
-  else {
-    Serial.println("Phone audio BUSY HIGH");
-  }
+void playPhoneSequence() {
+  unsigned long phoneStarted = millis();
 
-  Serial.println("Phone audio play");
-
-  digitalWrite(PLAYER1_IO1, LOW);
-  delay(PLAYER_TRIGGER_PULSE);
-  digitalWrite(PLAYER1_IO1, HIGH);
+  triggerPlayer(PLAYER1_IO1, "Phone player 1 play");
+  playPhoneServoSequence(phoneStarted);
+  triggerPlayer(PLAYER2_IO1, "Phone player 2 play");
 }
 
 
-void playPhoneServoMidiMotion(unsigned long startedAt) {
-  Serial.println("Phone servo MIDI motion");
+void triggerPlayer(byte pin, const char* message) {
+  Serial.println(message);
 
-  for (byte i = 0; i < PHONE_SERVO_NOTE_COUNT; i += 1) {
-    waitUntilFrom(startedAt, PHONE_SERVO_NOTE_STARTS[i]);
-    movePhoneServoTimed(PHONE_SERVO_NOTE_TARGETS[i], PHONE_SERVO_MOVE_DURATIONS[i]);
-    delayWithWatchdog(PHONE_SERVO_HOLD_DURATIONS[i]);
+  pinMode(pin, OUTPUT);
+  digitalWrite(pin, LOW);
+  delay(PLAYER_TRIGGER_PULSE);
+  releasePlayerTrigger(pin);
+}
+
+
+void releasePlayerTrigger(byte pin) {
+  pinMode(pin, INPUT_PULLUP);
+}
+
+
+void playPhoneServoSequence(unsigned long startedAt) {
+  Serial.println("Phone servo sequence");
+
+  waitUntilFrom(startedAt, PHONE_SERVO_START_DELAY_MS);
+
+  for (byte i = 0; i < PHONE_SERVO_MOVE_COUNT; i += 1) {
+    movePhoneServoForwardFor(PHONE_SERVO_FORWARD_DURATIONS[i]);
+
+    if (PHONE_SERVO_FORWARD_HOLD_DURATIONS[i] > 0) {
+      delayWithWatchdog(PHONE_SERVO_FORWARD_HOLD_DURATIONS[i]);
+    }
+
+    movePhoneServoToStartTimed(PHONE_SERVO_RETURN_DURATIONS[i]);
+
+    if (PHONE_SERVO_RETURN_HOLD_DURATIONS[i] > 0) {
+      delayWithWatchdog(PHONE_SERVO_RETURN_HOLD_DURATIONS[i]);
+    }
   }
+
+  Serial.println("Phone servo sequence done");
 
   phoneServoResetStarted = millis();
   phoneServoResetPending = true;
@@ -519,22 +625,48 @@ void delayWithWatchdog(unsigned int durationMs) {
 }
 
 
-void movePhoneServoTimed(byte targetAngle, unsigned int durationMs) {
-  int fromAngle = phoneServoCurrentAngle;
+void movePhoneServoForwardFor(unsigned int durationMs) {
   unsigned long startedAt = millis();
 
-  while (millis() - startedAt < durationMs) {
-    unsigned long elapsed = millis() - startedAt;
-    int nextAngle = fromAngle + (long)(targetAngle - fromAngle) * elapsed / durationMs;
+  while (millis() - startedAt < durationMs &&
+         phoneServoCurrentAngle > PHONE_SERVO_FORWARD) {
+    phoneServoCurrentAngle -= 1;
+    phoneServo.write(phoneServoCurrentAngle);
 
-    phoneServo.write(nextAngle);
-    phoneServoCurrentAngle = nextAngle;
     wdt_reset();
-    delay(5);
+    delay(PHONE_SERVO_FORWARD_STEP_DELAY_MS);
+  }
+}
+
+
+void movePhoneServoToStartTimed(unsigned int durationMs) {
+  int fromAngle = phoneServoCurrentAngle;
+
+  if (fromAngle >= PHONE_SERVO_START) {
+    phoneServo.write(PHONE_SERVO_START);
+    phoneServoCurrentAngle = PHONE_SERVO_START;
+    return;
   }
 
-  phoneServo.write(targetAngle);
-  phoneServoCurrentAngle = targetAngle;
+  int distance = PHONE_SERVO_START - fromAngle;
+  unsigned int stepDelay = durationMs / distance;
+  unsigned int extraDelay = durationMs % distance;
+
+  for (int pos = fromAngle; pos <= PHONE_SERVO_START; pos += 1) {
+    phoneServo.write(pos);
+    phoneServoCurrentAngle = pos;
+
+    wdt_reset();
+
+    if (pos < PHONE_SERVO_START) {
+      delay(stepDelay);
+
+      if (extraDelay > 0) {
+        delay(1);
+        extraDelay -= 1;
+      }
+    }
+  }
 }
 
 
@@ -549,6 +681,6 @@ void checkPhoneServoAutoReset() {
 
   Serial.println("Phone servo auto reset");
 
-  movePhoneServoTimed(PHONE_SERVO_START, 1000);
+  movePhoneServoToStartTimed(1000);
   phoneServoResetPending = false;
 }
