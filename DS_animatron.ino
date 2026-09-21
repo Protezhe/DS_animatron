@@ -1,6 +1,7 @@
 // D9 Серва в телефоне
 // DF Player (1) D5 IO 1
-// DF Player (2) D6 IO 1
+// DF Player (2) D5 IO 1
+// D7 импульс LOW почтового ящика, 200 мс; в покое HIGH
 // D8 неизвестно в стену
 // RELAY_POSTBOX     = D2 D3;
 
@@ -49,6 +50,8 @@ bool allRelaysAreOff = false;
 //
 
 const byte RELAY_POSTBOX     = 3;
+const byte POSTBOX_PULSE_PIN = 7;
+const unsigned int POSTBOX_PULSE_DURATION_MS = 200;
 const byte RELAY_ENERGYMETER = A0;
 const byte RELAY_LIFT_PANEL  = A1;
 const byte RELAY_BALL        = A2;
@@ -144,6 +147,8 @@ void setup() {
   Serial.begin(9600);
 
   pinMode(RELAY_POSTBOX, OUTPUT);
+  digitalWrite(POSTBOX_PULSE_PIN, HIGH);
+  pinMode(POSTBOX_PULSE_PIN, OUTPUT);
   pinMode(RELAY_ENERGYMETER, OUTPUT);
   pinMode(RELAY_LIFT_PANEL, OUTPUT);
   pinMode(RELAY_BALL, OUTPUT);
@@ -383,8 +388,12 @@ void processCommand(char* command) {
 
   // -------- POSTBOX --------
 
-  if (strcmp(command, "/postbox,1") == 0) {
+  if (strcmp(command, "/postbox") == 0 ||
+      strcmp(command, "/postbox,1") == 0) {
     relayOn(RELAY_POSTBOX);
+    digitalWrite(POSTBOX_PULSE_PIN, LOW);
+    delay(POSTBOX_PULSE_DURATION_MS);
+    digitalWrite(POSTBOX_PULSE_PIN, HIGH);
   }
 
   else if (strcmp(command, "/postbox,0") == 0) {
